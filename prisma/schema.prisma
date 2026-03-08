@@ -1,0 +1,144 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id                String          @id @default(uuid())
+  email             String          @unique
+  name              String
+  country           String?
+  investmentGoals   String?         @map("investment_goals")
+  riskTolerance     String?         @map("risk_tolerance")
+  preferredIndustry String?         @map("preferred_industry")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  watchlist         WatchlistItem[]
+
+  @@map("users")
+}
+
+model WatchlistItem {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  symbol    String
+  company   String
+  addedAt   DateTime @default(now()) @map("added_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, symbol])
+  @@map("watchlist_items")
+}
+
+model ResearchRun {
+  id          String    @id @default(cuid())
+  userId      String
+  source      String    // "AGENT" | "MANUAL"
+  status      String    // "PENDING" | "RUNNING" | "COMPLETE" | "FAILED"
+  parameters  Json      // agent config snapshot at time of run
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  theses      Thesis[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Thesis {
+  id               String      @id @default(cuid())
+  researchRunId    String
+  userId           String
+  ticker           String
+  source           String      // "AGENT" | "MANUAL"
+  direction        String      // "LONG" | "SHORT" | "PASS"
+  entryPrice       Float?
+  targetPrice      Float?
+  stopLoss         Float?
+  holdDuration     String      // "DAY" | "SWING" | "POSITION"
+  confidenceScore  Int         // 0-100
+  reasoningSummary String
+  thesisBullets    String[]
+  riskFlags        String[]
+  signalTypes      String[]    // ["EARNINGS_BEAT", "SECTOR_ROTATION", etc.]
+  sector           String?
+  sourcesUsed      Json        // [{type, provider, title, url, publishedAt}]
+  modelUsed        String
+  fullResearch     Json?
+  researchRun      ResearchRun @relation(fields: [researchRunId], references: [id])
+  trade            Trade?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+}
+
+model Trade {
+  id              String       @id @default(cuid())
+  thesisId        String       @unique
+  userId          String
+  ticker          String
+  direction       String       // "LONG" | "SHORT"
+  status          String       // "OPEN" | "CLOSED" | "CANCELLED"
+  entryPrice      Float
+  shares          Float
+  targetPrice     Float?
+  stopLoss        Float?
+  exitStrategy    String       // "PRICE_TARGET" | "TIME_BASED" | "TRAILING" | "MANUAL"
+  exitDate        DateTime?
+  trailingStopPct Float?
+  closePrice      Float?
+  closeReason     String?      // "TARGET" | "STOP" | "TIME" | "MANUAL"
+  realizedPnl     Float?
+  outcome         String?      // "WIN" | "LOSS" | "BREAKEVEN"
+  agentEvaluation String?
+  alpacaOrderId   String?
+  notes           String?
+  thesis          Thesis       @relation(fields: [thesisId], references: [id])
+  events          TradeEvent[]
+  openedAt        DateTime     @default(now())
+  closedAt        DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+}
+
+model TradeEvent {
+  id          String   @id @default(cuid())
+  tradeId     String
+  eventType   String   // "PLACED" | "PRICE_CHECK" | "NEAR_TARGET" | "CLOSED" | "EVALUATED"
+  description String
+  priceAt     Float?
+  pnlAt       Float?
+  trade       Trade    @relation(fields: [tradeId], references: [id])
+  createdAt   DateTime @default(now())
+}
+
+model AgentConfig {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  enabled               Boolean  @default(false)
+  markets               String[] // ["US_EQUITIES", "CRYPTO", "ETFS"]
+  exchanges             String[] // ["NASDAQ", "NYSE"]
+  sectors               String[] // ["TECH", "FINANCE", ...]
+  watchlist             String[]
+  exclusionList         String[]
+  maxPositionSize       Float    @default(500)
+  maxOpenPositions      Int      @default(5)
+  minConfidence         Int      @default(70)
+  maxRiskPct            Float    @default(2)
+  dailyLossLimit        Float    @default(200)
+  holdDurations         String[] // ["SWING"]
+  directionBias         String   @default("BOTH")
+  signalTypes           String[]
+  minMarketCapTier      String   @default("LARGE")
+  scheduleTime          String   @default("07:30")
+  priceCheckFreq        String   @default("HOURLY")
+  weekendMode           Boolean  @default(false)
+  graduationWinRate     Float    @default(0.65)
+  graduationMinTrades   Int      @default(50)
+  graduationProfitFactor Float   @default(1.5)
+  realTradingEnabled    Boolean  @default(false)
+  realMaxPosition       Float    @default(500)
+  emailAlerts           Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
