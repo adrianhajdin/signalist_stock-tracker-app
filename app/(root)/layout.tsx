@@ -1,22 +1,22 @@
 import Header from "@/components/Header";
-import {auth} from "@/lib/better-auth/auth";
-import {headers} from "next/headers";
-import {redirect} from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
+import { redirect } from "next/navigation";
 
 const Layout = async ({ children }: { children : React.ReactNode }) => {
-    const session = await auth.api.getSession({ headers: await headers() });
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
 
-    if(!session?.user) redirect('/sign-in');
+    if (!user) redirect('/sign-in');
 
-    const user = {
-        id: session.user.id,
-        name: session.user.name,
-        email: session.user.email,
+    const userObj = {
+        id: user.id,
+        name: user.user_metadata?.full_name ?? user.email ?? '',
+        email: user.email ?? '',
     }
 
     return (
         <main className="min-h-screen text-gray-400">
-            <Header user={user} />
+            <Header user={userObj} />
 
             <div className="container py-10">
                 {children}

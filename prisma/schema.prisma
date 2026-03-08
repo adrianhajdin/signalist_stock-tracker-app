@@ -1,0 +1,34 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id                String          @id @default(uuid())
+  email             String          @unique
+  name              String
+  country           String?
+  investmentGoals   String?         @map("investment_goals")
+  riskTolerance     String?         @map("risk_tolerance")
+  preferredIndustry String?         @map("preferred_industry")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  watchlist         WatchlistItem[]
+
+  @@map("users")
+}
+
+model WatchlistItem {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  symbol    String
+  company   String
+  addedAt   DateTime @default(now()) @map("added_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, symbol])
+  @@map("watchlist_items")
+}

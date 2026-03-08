@@ -1,13 +1,13 @@
 import Link from "next/link";
 import Image from "next/image";
-import {auth} from "@/lib/better-auth/auth";
-import {headers} from "next/headers";
-import {redirect} from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
+import { redirect } from "next/navigation";
 
 const Layout = async ({ children }: { children : React.ReactNode }) => {
-    const session = await auth.api.getSession({ headers: await headers() })
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
 
-    if(session?.user) redirect('/')
+    if (user) redirect('/')
 
     return (
         <main className="auth-layout">
