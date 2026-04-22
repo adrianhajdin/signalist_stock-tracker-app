@@ -3,6 +3,9 @@
 # dependencies
 /node_modules
 .next
+
+# archived legacy code (pre-agent)
+.archive/
 /.pnp
 .pnp.*
 .yarn/*
@@ -40,3 +43,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/lib/generated/prisma
+.claude/worktrees/
+.worktrees/

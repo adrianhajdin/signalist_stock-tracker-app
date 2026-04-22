@@ -1,54 +1,31 @@
-import TradingViewWidget from "@/components/TradingViewWidget";
-import {
-    HEATMAP_WIDGET_CONFIG,
-    MARKET_DATA_WIDGET_CONFIG,
-    MARKET_OVERVIEW_WIDGET_CONFIG,
-    TOP_STORIES_WIDGET_CONFIG
-} from "@/lib/constants";
-import {sendDailyNewsSummary} from "@/lib/inngest/functions";
+import DashboardClient from "@/components/dashboard/DashboardClient";
+import { getDashboardData } from "@/lib/actions/portfolio.actions";
+import type { DashboardData } from "@/lib/actions/portfolio.actions";
+import { createClient } from "@/lib/supabase/server";
 
-const Home = () => {
-    const scriptUrl = `https://s3.tradingview.com/external-embedding/embed-widget-`;
+const EMPTY_DASHBOARD: DashboardData = {
+  openTrades: [], closedTrades: [], activityFeed: [],
+  portfolio: { totalValue: 100_000, unrealizedPnl: 0, realizedPnl: 0, winRate: null, openCount: 0 },
+  equityCurve: [], realizedCurve: [], agentConfigs: [], recentRuns: [],
+  todaysPicks: [], recentPicks: [], hasAlpacaKey: false, analystCount: 0,
+  hasCompletedRun: false, hasBrief: false, analysts: [], analystEquityCurves: {},
+  spyBenchmark: { '1W': null, '1M': null, '1Y': null },
+  spyCandles: [],
+};
 
-    return (
-        <div className="flex min-h-screen home-wrapper">
-          <section className="grid w-full gap-8 home-section">
-              <div className="md:col-span-1 xl:col-span-1">
-                  <TradingViewWidget
-                    title="Market Overview"
-                    scriptUrl={`${scriptUrl}market-overview.js`}
-                    config={MARKET_OVERVIEW_WIDGET_CONFIG}
-                    className="custom-chart"
-                    height={600}
-                  />
-              </div>
-              <div className="md-col-span xl:col-span-2">
-                  <TradingViewWidget
-                      title="Stock Heatmap"
-                      scriptUrl={`${scriptUrl}stock-heatmap.js`}
-                      config={HEATMAP_WIDGET_CONFIG}
-                      height={600}
-                  />
-              </div>
-          </section>
-            <section className="grid w-full gap-8 home-section">
-                <div className="h-full md:col-span-1 xl:col-span-1">
-                    <TradingViewWidget
-                        scriptUrl={`${scriptUrl}timeline.js`}
-                        config={TOP_STORIES_WIDGET_CONFIG}
-                        height={600}
-                    />
-                </div>
-                <div className="h-full md:col-span-1 xl:col-span-2">
-                    <TradingViewWidget
-                        scriptUrl={`${scriptUrl}market-quotes.js`}
-                        config={MARKET_DATA_WIDGET_CONFIG}
-                        height={600}
-                    />
-                </div>
-            </section>
-        </div>
-    )
+export default async function Home() {
+  const [data, supabase] = await Promise.all([
+    getDashboardData().catch(() => EMPTY_DASHBOARD),
+    createClient(),
+  ]);
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  return (
+    <DashboardClient
+      data={data}
+      userId={user?.id}
+    />
+  );
 }
-
-export default Home;

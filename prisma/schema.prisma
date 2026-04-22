@@ -1,0 +1,672 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id                String          @id @default(uuid())
+  email             String          @unique
+  name              String
+  country           String?
+  investmentGoals   String?         @map("investment_goals")
+  riskTolerance     String?         @map("risk_tolerance")
+  preferredIndustry String?         @map("preferred_industry")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  watchlist         WatchlistItem[]
+
+  @@map("users")
+}
+
+model WatchlistItem {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  symbol    String
+  company   String
+  addedAt   DateTime @default(now()) @map("added_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, symbol])
+  @@map("watchlist_items")
+}
+
+model ResearchRun {
+  id            String       @id @default(cuid())
+  userId        String
+  agentConfigId String?      // FK to AgentConfig; null for manual/legacy runs
+  source        String       // "AGENT" | "MANUAL"
+  status        String       // "PENDING" | "RUNNING" | "COMPLETE" | "FAILED"
+  parameters    Json         // agent config snapshot at time of run
+  startedAt     DateTime     @default(now())
+  completedAt   DateTime?
+  theses        Thesis[]
+  events        RunEvent[]
+  messages      RunMessage[]
+  decisions     TradeDecision[]
+  agentConfig   AgentConfig?      @relation(fields: [agentConfigId], references: [id], onDelete: SetNull)
+  briefing      AnalystBriefing?
+  managementActions PositionManagementAction[]
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([agentConfigId])
+  @@index([userId])
+}
+
+model RunEvent {
+  id        String      @id @default(cuid())
+  runId     String
+  type      String      // "scan_complete" | "analyzing" | "data_ready" | "concept" | "thesis_complete" | "skip" | "run_complete" | "error"
+  title     String
+  message   String?
+  payload   Json?       // structured metadata: tickers, sources, thesis data, etc.
+  createdAt DateTime    @default(now())
+  run       ResearchRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([runId, createdAt])
+}
+
+model RunMessage {
+  id        String      @id @default(cuid())
+  runId     String
+  role      String      // "user" | "assistant"
+  content   String
+  createdAt DateTime    @default(now())
+  run       ResearchRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+}
+
+enum ThesisStatus {
+  ACTIVE
+  INVALIDATED
+  CLOSED
+  SUPERSEDED
+}
+
+model Thesis {
+  id               String        @id @default(cuid())
+  researchRunId    String
+  userId           String
+  ticker           String
+  source           String        // "AGENT" | "MANUAL"
+  direction        String        // "LONG" | "SHORT" | "PASS"
+  entryPrice       Float?
+  targetPrice      Float?
+  stopLoss         Float?
+  holdDuration     String        // "DAY" | "SWING" | "POSITION"
+  confidenceScore  Int           // 0-100
+  reasoningSummary String
+  thesisBullets    String[]
+  riskFlags        String[]
+  signalTypes      String[]      // ["EARNINGS_BEAT", "SECTOR_ROTATION", etc.]
+  sector           String?
+  sourcesUsed      Json          // [{type, provider, title, url, publishedAt}]
+  modelUsed        String
+  fullResearch     Json?
+  thoughtTrace     Json?         // [{type, data, timestamp_ms}] — per-ticker event log for replay
+
+  // V2: Thesis lifecycle
+  status           ThesisStatus  @default(ACTIVE)
+  parentThesisId   String?       // Links to prior thesis on same ticker
+  invalidatedAt    DateTime?
+  invalidReason    String?
+
+  // Relations
+  researchRun      ResearchRun   @relation(fields: [researchRunId], references: [id])
+  decisions        TradeDecision[]
+  parentThesis     Thesis?       @relation("ThesisChain", fields: [parentThesisId], references: [id])
+  childTheses      Thesis[]      @relation("ThesisChain")
+
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([researchRunId])
+  @@index([userId])
+  @@index([ticker])
+  @@index([userId, ticker, status])
+}
+
+model AgentConfig {
+  id                    String        @id @default(cuid())
+  userId                String        // NOT unique — multiple Analysts per user
+  name                  String        @default("My Analyst")
+  enabled               Boolean       @default(false)
+  // Analyst identity
+  analystPrompt         String?       // "Find me high-risk EV day trades every morning"
+  analystVoice          String?       // "aggressive momentum day trader who focuses on catalysts"
+  description           String?       // short display description on analyst card
+  // Strategy configuration (from prior branch, already in DB)
+  strategyType          String        @default("DISCOVERY") // "DISCOVERY" | "WATCHLIST" | "DIRECTED"
+  strategyInstructions  String?       // freeform prompt injection into Concept-CoT
+  tickerUniverse        String[]      @default([]) // for DIRECTED mode: always analyze these tickers
+  // V3 Session 3 / Workstream B — Universe fields.
+  // Universe = fence for discovery routing. Dimensions: existing `sectors`
+  // (broad GICS) + `industries` (narrower) + `themes` (analyst-defined) +
+  // `marketCapMin/Max` + existing `exchanges` + existing `exclusionList`.
+  // Match semantics (enforced in lib/inngest/functions/signal-router.ts):
+  //   - empty array or null numeric = no filter on that dimension
+  //   - AND across dimensions, OR within a dimension
+  //   - exclusionList hard-rejects
+  //   - watchlist + open positions bypass the fence entirely
+  industries            String[]      @default([])
+  themes                String[]      @default([])
+  marketCapMin          BigInt?
+  marketCapMax          BigInt?
+  tradePolicyAutoTrade  Boolean       @default(true) // true = auto-place paper trades
+  // Prompt customization
+  conceptPromptExtra    String?       // extra instructions for concept system prompt
+  thesisPromptExtra     String?       // extra instructions for thesis system prompt
+  researchRuns          ResearchRun[]
+  briefings             AnalystBriefing[]
+  positions             Position[]
+  decisions             TradeDecision[]
+  watchlistItems        AnalystWatchlistItem[]
+  markets               String[] // ["US_EQUITIES", "CRYPTO", "ETFS"]
+  exchanges             String[] // ["NASDAQ", "NYSE"]
+  sectors               String[] // ["TECH", "FINANCE", ...]
+  watchlist             String[]
+  exclusionList         String[]
+  maxPositionSize       Float    @default(500)
+  maxOpenPositions      Int      @default(5)
+  minConfidence         Int      @default(70)
+  maxRiskPct            Float    @default(2)
+  dailyLossLimit        Float    @default(200)
+  holdDurations         String[] // ["SWING"]
+  directionBias         String   @default("BOTH")
+  signalTypes           String[]
+  minMarketCapTier      String   @default("LARGE")
+  scheduleTime          String   @default("07:30")
+  priceCheckFreq        String   @default("HOURLY")
+  weekendMode           Boolean  @default(false)
+  graduationWinRate     Float    @default(0.65)
+  graduationMinTrades   Int      @default(50)
+  graduationProfitFactor Float   @default(1.5)
+  realTradingEnabled    Boolean  @default(false)
+  realMaxPosition       Float    @default(500)
+  emailAlerts           Boolean  @default(true)
+  weeklyDigestEnabled   Boolean  @default(true)
+  digestEmail           String?  // override email for digest; uses auth email when null
+  // V3: Intelligence layer
+  intelligencePolicy    Json?    // IntelligencePolicy type — controls signal budget, attention weights, search limits
+  signalRoutes          AnalystSignalRoute[]
+  morningBriefs         MorningBrief[]
+  monitors              Monitor[]
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+// ─── V3: INTELLIGENCE LAYER ──────────────────────────────────────────────────
+// Persistent intelligence backbone: monitors, signals, artifacts, routing.
+// Background jobs populate this layer; analyst runtime reads from it.
+
+/// Unified monitor — anything the intelligence system watches.
+/// Replaces the old split intelligence models.
+/// Each monitor represents one thing being checked: a search query, a domain,
+/// or an API endpoint.
+model Monitor {
+  id          String    @id @default(cuid())
+  name        String    // "Semiconductor supply chain", "reuters.com", "FMP Top Gainers", "Portfolio Tickers"
+  type        String    // "SEARCH" | "DOMAIN" | "API"
+  method      String    // "perplexity_sonar" | "firecrawl" | "fmp" | "finnhub" | "auto"
+  config      Json?     // type-specific: {query}, {domain, qualityScore}, {endpoint, params}, etc.
+  scope       String    @default("FIRM") // "FIRM" | "ANALYST"
+  analystId   String?
+  analyst     AgentConfig? @relation(fields: [analystId], references: [id], onDelete: Cascade)
+  enabled     Boolean   @default(true)
+  builtIn     Boolean   @default(false) // FMP, Finnhub, Portfolio, Watchlist — can't be deleted
+  origin      String    @default("USER") // "USER" | "BUILDER" | "BRIEFING_AGENT"
+  category    String    @default("MARKET") // "MARKET" | "SECTOR" | "TICKER" | "THEMATIC" | "EVENT"
+  expiresAt   DateTime? // null = permanent; set for temporary monitors from briefing agent
+  sourceRunId String?   // which run created this (for dynamic monitors from briefing agent)
+  lastRunAt   DateTime?
+
+  signals     Signal[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([type])
+  @@index([scope, enabled])
+  @@index([analystId])
+  @@index([expiresAt])
+}
+
+/// A raw piece of content extracted from the web — article, transcript, filing page.
+model Artifact {
+  id              String   @id @default(cuid())
+  url             String
+  title           String
+  contentMarkdown String?  // full extracted content (Firecrawl output)
+  contentSummary  String?  // 2-3 sentence summary
+  contentHash     String   // SHA256 for dedup
+  publishedAt     DateTime?
+  fetchedAt       DateTime @default(now())
+
+  signals         Signal[]
+
+  @@index([contentHash])
+  @@index([url])
+  @@index([fetchedAt])
+}
+
+/// A normalized piece of evidence — the core unit of the intelligence layer.
+/// Created by background jobs from search results, articles, filings, etc.
+model Signal {
+  id             String   @id @default(cuid())
+  batchId        String
+  batch          SignalBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  artifactId     String?
+  artifact       Artifact? @relation(fields: [artifactId], references: [id], onDelete: SetNull)
+  monitorId      String?  // FK to the Monitor that produced this finding
+  monitor        Monitor? @relation(fields: [monitorId], references: [id], onDelete: SetNull)
+
+  type           String   // "NEWS" | "EARNINGS" | "FILING" | "SOCIAL" | "PRICE_ACTION" |
+                          // "ANALYST_NOTE" | "OPTIONS" | "MACRO" | "SECTOR"
+  headline       String
+  summary        String   // 2-3 sentences of structured evidence
+  evidence       String?  // supporting detail / key quote
+  tickers        String[] // mentioned tickers
+  themes         String[] // "AI_CAPEX", "FED_RATE_CUT", "EARNINGS_BEAT"
+  sectors        String[]
+  // Session 3 / Workstream B contract — narrower classification so the router's
+  // INDUSTRY_MATCH code can fire. Producers (firm-market-sweep,
+  // portfolio-watchlist-monitor, domain-monitor) tag this at signal creation.
+  industries     String[] @default([])
+
+  sentiment      String   // "BULLISH" | "BEARISH" | "NEUTRAL" | "MIXED"
+  noveltyScore   Int      @default(50)  // 0-100
+  urgency        String   @default("MEDIUM") // "LOW" | "MEDIUM" | "HIGH" | "BREAKING"
+  sourceQuality  Int      @default(3)  // 1-5 inherited from Source
+  freshness      String   // "BREAKING" | "TODAY" | "THIS_WEEK" | "OLDER"
+  sourceUrls     String[]
+  sourceNames    String[]
+
+  // Provenance — how this signal was discovered
+  searchTool     String?  // "PERPLEXITY_SONAR" | "FMP" | "FINNHUB" | "FIRECRAWL"
+  searchQuery    String?  // the actual query or URL sent to the tool
+  searchContext  String?  // why this search happened (e.g. "watchlist:KLAC", "query:semiconductor AI capex")
+
+  // Aggregate findings — one signal can represent many data points
+  aggregateType  String?  // "MARKET_MOVERS_GAINERS" | "MARKET_MOVERS_LOSERS" | "MARKET_MOVERS_ACTIVES" | "EARNINGS_CALENDAR"
+  dataPayload    Json?    // [{ticker, change, price, volume}...] or [{ticker, date, epsEstimate}...]
+  itemCount      Int?     // how many items in the aggregate
+
+  expiresAt      DateTime?
+  routes         AnalystSignalRoute[]
+
+  // Stable fingerprint for tiered/cross-batch dedup.
+  // Hash of normalized headline + primary ticker + ISO-week bucket.
+  // See lib/intelligence/signals.ts:computeSignalFingerprint.
+  signalFingerprint String?
+
+  // Resend inbound email_id — prevents duplicate processing when the same
+  // webhook delivery lands twice. Only populated for EMAIL_INGEST signals.
+  emailMessageId String?
+
+  createdAt      DateTime @default(now())
+
+  @@index([tickers], type: Gin)
+  @@index([themes], type: Gin)
+  @@index([createdAt])
+  @@index([batchId])
+  @@index([monitorId])
+  @@index([signalFingerprint, createdAt])
+  @@index([emailMessageId])
+}
+
+/// A group of signals from one intelligence job run.
+model SignalBatch {
+  id          String    @id @default(cuid())
+  jobType     String    // "MARKET_SWEEP" | "PORTFOLIO_MONITOR" | "DOMAIN_MONITOR" | "EMAIL_INGEST" | "MANUAL"
+  status      String    @default("RUNNING") // "RUNNING" | "COMPLETE" | "FAILED"
+  signalCount Int       @default(0)
+  metadata    Json?     // job-specific metadata (query count, sources checked, etc.)
+
+  signals     Signal[]
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+}
+
+/// A signal routed to a specific analyst — the analyst's intelligence inbox.
+model AnalystSignalRoute {
+  id             String      @id @default(cuid())
+  analystId      String
+  analyst        AgentConfig @relation(fields: [analystId], references: [id], onDelete: Cascade)
+  signalId       String
+  signal         Signal      @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  relevanceScore Int         // 0-100, novelty-adjusted final score (used for ordering / brief inclusion)
+  rawRelevanceScore Int?     // 0-100, pre-novelty raw score (debugging — see signal-router.ts)
+  noveltyScore   Int?        // 0-100, per-(analyst,signal) novelty value applied as multiplier
+  routeReason    String      // legacy free-form: "ticker_match:AMD", "sector_match:TECH", …
+  // Session 3: canonical routing code used by agent/brief/read_signals to
+  // segment inbox. Enum (string, not Postgres enum — easier to evolve):
+  //   DISCOVERY | WATCHLIST | POSITION | DIRECT_TICKER |
+  //   SECTOR_MATCH | INDUSTRY_MATCH | THEME_MATCH | CROSS_ANALYST
+  // Nullable for legacy rows; all new routes populate it.
+  routeReasonCode String?
+  // Session 3: JSON explaining *why* this route matched — which sectors/
+  // industries/themes overlapped, in-watchlist/in-positions flags, and
+  // fromAnalystId for CROSS_ANALYST. Only populated keys contribute.
+  matchedUniverse Json?
+  status         String      @default("PENDING") // "PENDING" | "READ" | "ACTED_ON" | "DISMISSED"
+
+  routedAt       DateTime    @default(now())
+
+  @@index([analystId, status])
+  @@index([analystId, routedAt])
+  // Session 3: optimized for "give me DISCOVERY routes for this analyst, newest first".
+  @@index([analystId, routeReasonCode, routedAt(sort: Desc)])
+  @@index([signalId])
+}
+
+/// Pre-run intelligence summary generated per analyst each morning.
+/// Replaces the agent "rediscovering the world" — agent reads this and starts informed.
+model MorningBrief {
+  id                String      @id @default(cuid())
+  analystId         String
+  analyst           AgentConfig @relation(fields: [analystId], references: [id], onDelete: Cascade)
+  date              DateTime    @db.Date
+
+  marketContext     String      // 3-4 sentences on regime/themes
+  portfolioAlerts   Json        // [{ticker, alert, urgency, signalIds}]
+  watchlistUpdates  Json        // [{ticker, update, recommendation, signalIds}]
+  newOpportunities  Json        // [{headline, tickers, thesis_seed, signalIds}]
+  attentionPriority String[]    // ordered tickers to focus on today
+  riskFlags         String[]
+  signalCount       Int         @default(0)
+
+  generatedAt       DateTime    @default(now())
+
+  @@unique([analystId, date])
+  @@index([analystId])
+  @@index([date])
+}
+
+// ─── ANALYST WATCHLIST ─────────────────────────────────────────────────────
+// Per-analyst watchlist with metadata, thesis history, and lifecycle tracking.
+// Replaces the flat watchlist String[] on AgentConfig for structured tracking.
+
+model AnalystWatchlistItem {
+  id              String    @id @default(cuid())
+  analystId       String
+  userId          String
+  symbol          String
+  reason          String    // Why this stock is being watched
+  notes           String?   // Free-text notes, updated over time
+  addedBy         String    // "AGENT" | "USER" | "BUILDER"
+  priority        String    @default("NORMAL") // "HIGH" | "NORMAL" | "LOW"
+  status          String    @default("ACTIVE") // "ACTIVE" | "REMOVED" | "GRADUATED"
+  thesisDirection String?   // "LONG" | "SHORT" | "PASS" — agent's directional view
+  targetPrice     Float?    // Price target the agent is watching for
+  stopPrice       Float?    // Price level that invalidates the thesis
+  conviction      Int?      // 0-100 conviction score
+  catalyst        String?   // Key catalyst being monitored (e.g. "Q2 earnings Aug 1")
+  lastReviewedAt  DateTime? // Updated each time the agent reviews this item
+
+  // V2: Enhanced watchlist metadata
+  triggerCondition  String?       // Machine-readable: "price < 145", "RSI < 30", "earnings this week"
+  reviewFrequency   String?       // "DAILY" | "WEEKLY" | "ON_CATALYST"
+  addedRunId        String?       // Which run added this item
+  lastThesisId      String?       // Most recent thesis for this symbol
+
+  removedAt       DateTime?
+  removeReason    String?
+
+  // V2 Phase 3: Graduation tracking
+  promotedToPositionId  String?   // FK to Position that this watchlist item graduated into
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  analyst        AgentConfig @relation(fields: [analystId], references: [id], onDelete: Cascade)
+
+  @@unique([analystId, symbol, status]) // One active item per analyst per symbol
+  @@index([analystId, status])
+  @@index([userId])
+}
+
+// ─── NEW TRADING LAYER ─────────────────────────────────────────────────────
+// Separates what you OWN (Position) from what you DECIDED (TradeDecision)
+// from what you TOLD the broker (Order). The old Trade table conflated all three.
+
+/// What the analyst currently holds. One row per open holding per analyst.
+/// Closed positions stay for history. This is the "portfolio" view.
+model Position {
+  id              String          @id @default(cuid())
+  analystId       String          // FK to AgentConfig (the analyst who owns this)
+  userId          String
+  symbol          String
+  direction       String          // "LONG" | "SHORT"
+  status          String          // "OPEN" | "CLOSED" | "CANCELLED"
+  // Position sizing
+  quantity        Float           // total shares held
+  avgCost         Float           // weighted average entry price
+  // Targets & exit strategy
+  targetPrice     Float?
+  stopLoss        Float?
+  exitStrategy    String          // "PRICE_TARGET" | "TIME_BASED" | "TRAILING" | "MANUAL"
+  exitDate        DateTime?       // for TIME_BASED exits
+  trailingStopPct Float?          // for TRAILING exits
+  // Close data (populated when position is closed)
+  closePrice      Float?
+  closedAt        DateTime?
+  closeReason     String?         // "TARGET" | "STOP" | "TIME" | "MANUAL"
+  realizedPnl     Float?
+  outcome         String?         // "WIN" | "LOSS" | "BREAKEVEN"
+  // Evaluation
+  agentEvaluation String?         // post-trade GPT-4o evaluation narrative
+  // Monitoring
+  nearTargetAlertSent Boolean     @default(false)
+  // Audit trail — who closed / modified and why
+  closeSource     String?         // "agent" | "price_monitor" | "user" — who triggered the close
+  initialQty      Float?          // qty at open, before any partial closes or adds
+  // Running high/low water marks — maintained by price monitor on each tick
+  peakPrice       Float?
+  troughPrice     Float?
+  peakAt          DateTime?
+  troughAt        DateTime?
+  // Relations
+  analyst         AgentConfig     @relation(fields: [analystId], references: [id])
+  orders          Order[]
+  events          PositionEvent[]
+  decisions       TradeDecision[]
+  managementActions PositionManagementAction[]
+
+  openedAt        DateTime        @default(now())
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([analystId])
+  @@index([userId])
+  @@index([status])
+  @@index([userId, status])
+}
+
+/// Intent to buy/sell — what we told Alpaca.
+/// For paper trading, orders fill immediately (1:1 with fills).
+/// Fill data lives directly on the order (no separate Fill table needed for paper trading).
+model Order {
+  id              String          @id @default(cuid())
+  positionId      String          // FK to Position
+  userId          String
+  symbol          String
+  side            String          // "BUY" | "SELL"
+  orderType       String          @default("MARKET") // "MARKET" | "LIMIT" | "STOP"
+  quantity        Float
+  // Order status
+  status          String          // "PENDING" | "FILLED" | "CANCELLED" | "REJECTED"
+  // Fill data (populated when filled — for paper trading this is immediate)
+  filledPrice     Float?
+  filledQty       Float?
+  filledAt        DateTime?
+  // Alpaca
+  alpacaOrderId   String?
+  // Relations
+  position        Position        @relation(fields: [positionId], references: [id])
+  decision        TradeDecision?
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([positionId])
+  @@index([userId])
+}
+
+/// Lifecycle events on a position — price checks, near-target alerts, close, evaluation.
+/// Replaces TradeEvent but scoped to Position instead of Trade.
+model PositionEvent {
+  id          String   @id @default(cuid())
+  positionId  String
+  eventType   String   // "OPENED" | "PRICE_CHECK" | "NEAR_TARGET" | "CLOSED" | "EVALUATED" | "EOD_CHECK" | "MODIFIED" | "PARTIAL_CLOSE" | "TARGET_UPDATED" | "STOP_MOVED" | "ADDED"
+  description String
+  priceAt     Float?
+  pnlAt       Float?
+  position    Position @relation(fields: [positionId], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([positionId])
+  @@index([positionId, createdAt])
+}
+
+/// Audit record for every position change — agent decisions, price monitor closes,
+/// partial exits, target updates. Every row has a human-readable reason string.
+model PositionManagementAction {
+  id              String    @id @default(cuid())
+  positionId      String
+  position        Position  @relation(fields: [positionId], references: [id])
+  runId           String?   // null when triggered by price monitor
+  run             ResearchRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  actionType      String    // "FULL_CLOSE" | "PARTIAL_CLOSE" | "ADD_TO_POSITION" | "UPDATE_TARGETS" | "MOVE_STOP_TO_BREAKEVEN" | "SET_TRAILING_STOP"
+  source          String    // "agent" | "price_monitor" | "user"
+
+  // Before/after for every mutable field (null = unchanged)
+  prevTargetPrice Float?
+  newTargetPrice  Float?
+  prevStopLoss    Float?
+  newStopLoss     Float?
+  prevTrailPct    Float?
+  newTrailPct     Float?
+  prevQty         Float?
+  newQty          Float?
+
+  // Human-readable reason — required, written to the public audit trail
+  reason          String
+
+  // For partial closes / adds — the Alpaca order that executed
+  alpacaOrderId   String?
+  fillPrice       Float?
+  fillQty         Float?
+
+  createdAt       DateTime  @default(now())
+
+  @@index([positionId])
+  @@index([runId])
+}
+
+/// Every decision made during a run about a ticker.
+/// This is the join between "what I thought" (Thesis) and "what I did" (Order/Position).
+/// Replaces the old shadow-trade hack — a PASS decision is just a decision with no order.
+model TradeDecision {
+  id          String        @id @default(cuid())
+  runId       String        // FK to ResearchRun
+  analystId   String        // FK to AgentConfig
+  userId      String
+  symbol      String
+  decision    String        // "BUY" | "SELL" | "HOLD" | "PASS"
+  reasoning   String?       // brief note on why this decision was made
+  // Links (all optional depending on decision type)
+  thesisId    String?       // FK to Thesis — the analysis behind this decision
+  positionId  String?       // FK to Position — null for PASS, set for BUY/SELL/HOLD
+  orderId     String?       @unique // FK to Order — null for PASS/HOLD, set for BUY/SELL
+  // Relations
+  run         ResearchRun   @relation(fields: [runId], references: [id])
+  analyst     AgentConfig   @relation(fields: [analystId], references: [id])
+  thesis      Thesis?       @relation(fields: [thesisId], references: [id])
+  position    Position?     @relation(fields: [positionId], references: [id])
+  order       Order?        @relation(fields: [orderId], references: [id])
+
+  createdAt   DateTime      @default(now())
+
+  @@index([runId])
+  @@index([analystId])
+  @@index([symbol])
+  @@index([userId, symbol])
+}
+
+model AnalystBriefing {
+  id                String        @id @default(cuid())
+  analystId         String
+  runId             String?       @unique // the run that generated this briefing (null if manual)
+  userId            String
+  // Structured data — each renders as a domain card
+  narrative         String        // AI-generated analysis/adaptation narrative (markdown with $TICKER)
+  marketContext     Json?         // MarketContextData snapshot (renders as MarketContextCard)
+  theses            Json?         // ThesisCardData[] from this run (renders as ThesisCards)
+  trades            Json?         // TradeCardData[] placed in this run (renders as TradeCards)
+  portfolioSnapshot Json?        // { openPositions, totalPnl, winRate, totalInvested, closedPnl, wins, losses }
+  strategyNotes     String?       // What's working, what to adjust, what to watch next
+
+  // V2: Structured brief fields — agent produces these directly
+  marketPosture     String?       // "cautiously bullish", "defensive", "max long exposure"
+  watchTomorrow     Json?         // Array<{symbol, trigger, suggestedAction, priority}>
+  unresolvedItems   Json?         // Array<{item, impact, affectedPositions}>
+  selfCorrections   Json?         // Array<{observation, adjustment}>
+
+  createdAt         DateTime      @default(now())
+  analyst           AgentConfig   @relation(fields: [analystId], references: [id], onDelete: Cascade)
+  run               ResearchRun?  @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([analystId, createdAt])
+  @@index([runId])
+}
+
+model AccuracyReport {
+  id               String   @id @default(cuid())
+  userId           String
+  weekStartDate    DateTime
+  weekEndDate      DateTime
+  tradesAnalyzed   Int
+  winRate          Float?                  // 0-1 overall win rate
+  calibrationData  Json                    // CalibrationBucket[]
+  signalAccuracy   Json                    // SignalAccuracy[]
+  directionStats   Json                    // { LONG: {winRate, count}, SHORT: {winRate, count} }
+  narrativeSummary String?                 // GPT-4o calibration narrative (DAV-77)
+  createdAt        DateTime @default(now())
+
+  @@index([userId])
+  @@index([weekStartDate])
+}
+
+// ─── USER API KEYS ─────────────────────────────────────────────────────────
+// Stores encrypted third-party API credentials per user.
+// One row per (userId, provider) pair. Keys are AES-256-GCM encrypted at rest.
+
+model UserApiKey {
+  id             String   @id @default(cuid())
+  userId         String
+  provider       String   // "ALPACA" — extensible for future providers
+  label          String?  // user-friendly label, e.g. "My Paper Account"
+  // Encrypted fields — ciphertext + iv + authTag, base64-encoded
+  encryptedKey   String   // API key (encrypted)
+  encryptedSecret String  // API secret (encrypted)
+  keyHint        String?  // last 4 chars of key for display, e.g. "...a1b2"
+  // Alpaca-specific
+  paperMode      Boolean  @default(true)  // paper vs live (always paper for now)
+  baseUrl        String?  // custom base URL override
+  // Status
+  verified       Boolean  @default(false) // true after successful getAccount() call
+  verifiedAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([userId, provider])
+  @@index([userId])
+}

@@ -8,10 +8,6 @@ declare global {
         fullName: string;
         email: string;
         password: string;
-        country: string;
-        investmentGoals: string;
-        riskTolerance: string;
-        preferredIndustry: string;
     };
 
     type CountrySelectProps = {
@@ -56,7 +52,7 @@ declare global {
     };
 
     type SearchCommandProps = {
-        renderAs?: 'button' | 'text';
+        renderAs?: 'button' | 'text' | 'icon';
         label?: string;
         initialStocks: StockWithWatchlistStatus[];
     };
@@ -71,6 +67,12 @@ declare global {
         id: string;
         name: string;
         email: string;
+    };
+
+    type UserForNewsEmail = {
+        id: string;
+        email: string;
+        name: string;
     };
 
     type Stock = {
@@ -168,14 +170,6 @@ declare global {
         news?: MarketNewsArticle[];
     };
 
-    type SearchCommandProps = {
-        open?: boolean;
-        setOpen?: (open: boolean) => void;
-        renderAs?: 'button' | 'text';
-        buttonLabel?: string;
-        buttonVariant?: 'primary' | 'secondary';
-        className?: string;
-    };
 
     type AlertData = {
         symbol: string;

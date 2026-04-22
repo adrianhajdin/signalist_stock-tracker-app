@@ -1,0 +1,11 @@
+#!/bin/sh
+# Pre-commit: type-check the whole project.
+# Skips gracefully if node_modules or the Prisma client isn't generated
+# yet (e.g. fresh clone before `npm install`).
+if [ ! -d node_modules ] || [ ! -d lib/generated/prisma ]; then
+  echo "⏭  pre-commit: skipping tsc (run npm install && npx prisma generate first)"
+  exit 0
+fi
+
+echo "🔎 pre-commit: npx tsc --noEmit"
+npx tsc --noEmit

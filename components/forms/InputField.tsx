@@ -18,7 +18,7 @@ const InputField = ({ name, label, placeholder, type = "text", register, error, 
                 className={cn('form-input', { 'opacity-50 cursor-not-allowed': disabled })}
                 {...register(name, validation)}
             />
-            {error && <p className="text-sm text-red-500">{error.message}</p>}
+            {error && <p className="text-sm text-negative">{error.message}</p>}
         </div>
     )
 }

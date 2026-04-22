@@ -77,7 +77,7 @@ If you're getting started and need assistance or face any bugs, join our active 
 
 👉 **Stock Dashboard**: Track real-time stock prices with interactive line and candlestick charts, including historical data, and filter stocks by industry, performance, or market cap.
 
-👉 **Powerful Search**: Quickly find the best stocks with an intelligent search system that helps you navigate through Signalist.
+👉 **Powerful Search**: Quickly find the best stocks with an intelligent search system that helps you navigate through Hindsight.
 
 👉 **Watchlist & Alerts**: Create a personalized watchlist, set alert thresholds for price changes or volume spikes, and receive instant email notifications to stay on top of the market.
 
@@ -108,8 +108,8 @@ Make sure you have the following installed on your machine:
 **Cloning the Repository**
 
 ```bash
-git clone https://github.com/adrianhajdin/signalist_stock-tracker-app.git
-cd signalist_stock-tracker-app
+git clone https://github.com/dave-sucks/hindsight.git
+cd hindsight
 ```
 
 **Installation**
